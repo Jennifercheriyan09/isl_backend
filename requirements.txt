@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+tensorflow-cpu
+scikit-learn
+joblib
+numpy
+python-multipart
