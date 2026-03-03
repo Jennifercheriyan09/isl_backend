@@ -5,3 +5,5 @@ scikit-learn
 joblib
 numpy
 python-multipart
+opencv-python-headless
+mediapipe
