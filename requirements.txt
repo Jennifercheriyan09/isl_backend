@@ -1,5 +1,6 @@
 fastapi
 uvicorn
+tensorflow==2.15.0
 tensorflow-cpu
 scikit-learn
 joblib
@@ -7,4 +8,4 @@ numpy
 python-multipart
 opencv-python-headless
 mediapipe==0.10.21
-tensorflow==2.15.0
+opencv-contrib-python-headless
