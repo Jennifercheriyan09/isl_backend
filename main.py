@@ -217,13 +217,6 @@ async def predict(video: UploadFile = File(...)):
             "label":      str(label_classes[idx]),
             "confidence": float(preds[idx]),
             "landmarks":  X_raw.tolist(),   # ← NEW: (30, 426) raw landmarks
-            "top_5": [
-                {
-                    "label":      str(label_classes[i]),
-                    "confidence": float(preds[i])
-                }
-                for i in top5_idx
-            ]
         }
 
     except Exception as e:
