@@ -43,20 +43,17 @@ mp_holistic = mp.solutions.holistic
 def crop_to_training_ratio(frame: np.ndarray) -> np.ndarray:
     """
     Center-crop frame to 4:3 ratio then resize to 640x480.
-    Avoids distortion when input video has a different aspect ratio
-    (e.g. 16:9, 2.22:1) vs training which was always 4:3 640x480.
+    Avoids distortion when input video has a different aspect ratio.
     """
     h, w          = frame.shape[:2]
     target_ratio  = FRAME_W / FRAME_H  # 4:3 = 1.333
     current_ratio = w / h
 
     if current_ratio > target_ratio:
-        # Too wide — trim left and right, keep full height
         new_w = int(h * target_ratio)
         left  = (w - new_w) // 2
         frame = frame[:, left: left + new_w]
     elif current_ratio < target_ratio:
-        # Too tall — trim top and bottom, keep full width
         new_h = int(w / target_ratio)
         top   = (h - new_h) // 2
         frame = frame[top: top + new_h, :]
@@ -64,9 +61,9 @@ def crop_to_training_ratio(frame: np.ndarray) -> np.ndarray:
     return cv2.resize(frame, (FRAME_W, FRAME_H))
 
 
-# ── LANDMARK EXTRACTION — identical to training Cell 1 ───────────────────────
+# ── LANDMARK EXTRACTION ───────────────────────────────────────────────────────
 def extract_landmarks(results) -> np.ndarray:
-    # Pose — anchor: nose (index 0)
+    # Pose
     if results.pose_landmarks:
         pose = np.array([[lm.x, lm.y, lm.z]
                          for lm in results.pose_landmarks.landmark])
@@ -74,7 +71,7 @@ def extract_landmarks(results) -> np.ndarray:
     else:
         pose = np.zeros(33 * 3)
 
-    # Face (key landmarks only) — anchor: nose tip (index 1)
+    # Face (key landmarks only)
     if results.face_landmarks:
         all_face = np.array([[lm.x, lm.y, lm.z]
                               for lm in results.face_landmarks.landmark])
@@ -83,7 +80,7 @@ def extract_landmarks(results) -> np.ndarray:
     else:
         face = np.zeros(len(FACE_KEY_INDICES) * 3)
 
-    # Left hand — anchor: wrist (index 0)
+    # Left hand
     if results.left_hand_landmarks:
         lh = np.array([[lm.x, lm.y, lm.z]
                         for lm in results.left_hand_landmarks.landmark])
@@ -91,7 +88,7 @@ def extract_landmarks(results) -> np.ndarray:
     else:
         lh = np.zeros(21 * 3)
 
-    # Right hand — anchor: wrist (index 0)
+    # Right hand
     if results.right_hand_landmarks:
         rh = np.array([[lm.x, lm.y, lm.z]
                         for lm in results.right_hand_landmarks.landmark])
@@ -102,18 +99,17 @@ def extract_landmarks(results) -> np.ndarray:
     return np.concatenate([pose, face, lh, rh])  # (426,)
 
 
-# ── VELOCITY — identical to training Cell 1 ──────────────────────────────────
+# ── VELOCITY ──────────────────────────────────────────────────────────────────
 def add_velocity(sequence_np: np.ndarray) -> np.ndarray:
     """Appends hand velocity features. (30, 426) → (30, 552)"""
-    hand    = sequence_np[:, HAND_START:]  # (30, 126)
+    hand    = sequence_np[:, HAND_START:]
     vel     = np.zeros_like(hand)
     vel[1:] = hand[1:] - hand[:-1]
-    return np.concatenate([sequence_np, vel], axis=1)  # (30, 552)
+    return np.concatenate([sequence_np, vel], axis=1)
 
 
 # ── ACTIVE FRAME DETECTION ────────────────────────────────────────────────────
 def is_hands_active(frame_landmarks: np.ndarray) -> bool:
-    """True if at least one hand has non-zero landmarks."""
     lh = frame_landmarks[HAND_START: HAND_START + 63]
     rh = frame_landmarks[HAND_START + 63: HAND_START + 126]
     return not (np.all(lh == 0) and np.all(rh == 0))
@@ -134,44 +130,36 @@ def extract_sequence_from_video(video_path: str) -> np.ndarray:
 
     try:
         with mp_holistic.Holistic(
-            static_image_mode=False,       # tracking mode — same as training
-            min_detection_confidence=0.5,  # same as training
-            min_tracking_confidence=0.5,   # same as training
-            model_complexity=1             # same as training
+            static_image_mode=False,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5,
+            model_complexity=1
         ) as holistic:
             for _ in range(total_frames):
-                ret, frame = cap.read()    # sequential — preserves tracker context
+                ret, frame = cap.read()
                 if not ret:
                     all_landmarks.append(np.zeros(RAW_FEATURES))
                     continue
 
-                # ── Match training preprocessing exactly ─────────────────
-                frame   = crop_to_training_ratio(frame)            # center crop → 640x480
-                rgb     = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)   # BGR → RGB
+                frame   = crop_to_training_ratio(frame)
+                rgb     = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 rgb     = np.ascontiguousarray(rgb, dtype=np.uint8)
-                # No flip — INCLUDE was shot on fixed camera, not mirrored
                 results = holistic.process(rgb)
                 all_landmarks.append(extract_landmarks(results))
     finally:
         cap.release()
 
-    # Trim to active signing frames only
     active_frames = [f for f in all_landmarks if is_hands_active(f)]
     print(f"[DEBUG] Total: {len(all_landmarks)}, Active: {len(active_frames)}")
 
     if len(active_frames) >= SEQUENCE_LENGTH:
-        # Evenly sample 30 from active frames
         indices  = np.linspace(0, len(active_frames) - 1, SEQUENCE_LENGTH, dtype=int)
         sequence = np.array(active_frames)[indices]
-
     elif len(active_frames) > 0:
-        # Pad with last frame — same as training
         print(f"[WARN] Only {len(active_frames)} active frames, padding to {SEQUENCE_LENGTH}")
         pad      = [active_frames[-1]] * (SEQUENCE_LENGTH - len(active_frames))
         sequence = np.array(active_frames + pad)
-
     else:
-        # No hands at all — fall back to full video
         print("[WARN] No active hands detected, falling back to full video")
         indices  = np.linspace(0, total_frames - 1, SEQUENCE_LENGTH, dtype=int)
         sequence = np.array(all_landmarks)[indices]
@@ -189,6 +177,7 @@ def home():
     }
 
 
+# ── ONLY CHANGE IS HERE — landmarks added to response ─────────────────────────
 @app.post("/predict")
 async def predict(video: UploadFile = File(...)):
     suffix = os.path.splitext(video.filename)[-1] or ".mp4"
@@ -209,7 +198,7 @@ async def predict(video: UploadFile = File(...)):
         # 2. Add velocity → (30, 552)
         X_vel = add_velocity(X_raw)
 
-        # 3. Scale using RobustScaler fit on training data
+        # 3. Scale
         X_scaled = scaler.transform(
             X_vel.reshape(-1, FINAL_FEATURES)
         ).reshape(1, SEQUENCE_LENGTH, FINAL_FEATURES)
@@ -221,9 +210,13 @@ async def predict(video: UploadFile = File(...)):
 
         print(f"[DEBUG] Predicted: {label_classes[idx]} ({preds[idx]:.3f})")
 
+        # ── CHANGE: added landmarks to response ──────────────────────────────
+        # X_raw is (30, 426) raw unscaled — adaptive learning will re-apply
+        # velocity + scaling itself to match the training pipeline exactly
         return {
             "label":      str(label_classes[idx]),
             "confidence": float(preds[idx]),
+            "landmarks":  X_raw.tolist(),   # ← NEW: (30, 426) raw landmarks
             "top_5": [
                 {
                     "label":      str(label_classes[i]),
